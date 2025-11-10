@@ -23,6 +23,7 @@ from transformers import (
 )
 
 from sklearn.metrics import accuracy_score
+from datasets import Dataset
 import torch
 import json
 import os
@@ -253,6 +254,76 @@ def content_safety_dataset():
         'text':texts,
         'category': categories
     })
+
+
+def prepare_data_clean(df, model_name):
+
+    # create label mapping
+    categories = sorted(df['category'].unique())
+    label_mapping = {cat: idx for idx, cat in enumerate(categories)}
+    id2label = {idx: cat for cat, idx in label_mapping.items()}
+    label2id = label_mapping
+
+    print(f"Categories: {categories}")
+    print(f"Total samples: {len(df)}")
+    print(f"Distribution: {df['category'].value_counts().to_dict()}")
+
+
+    df['labels'] = df['category'].map(label_mapping)
+
+    # clean split
+    train_data = []
+    test_data = []
+
+    for category in categories:
+        category_data = df[df['category'] == category].copy().reset_index(drop=True)
+        
+        # Take 3 samples for test, rest for train
+        n_test = 3
+        test_indices = list(range(n_test))
+        train_indices = list(range(n_test, len(category_data)))
+        
+        test_data.append(category_data.iloc[test_indices])
+        train_data.append(category_data.iloc[train_indices])
+    
+    train_df = pd.concat(train_data, ignore_index=True)
+    test_df = pd.concat(test_data, ignore_index=True)
+    
+    # Shuffle
+    train_df = train_df.sample(frac=1, random_state=42).reset_index(drop=True)
+    test_df = test_df.sample(frac=1, random_state=42).reset_index(drop=True)
+    
+    print(f"Training samples: {len(train_df)}")
+    print(f"Test samples: {len(test_df)}")
+
+
+    # Initialize tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    # Clean tokenization function
+    def tokenize_function(examples):
+        text = examples['text']
+        if isinstance(text, str):
+            texts = [text]
+
+        return tokenizer(
+            texts,
+            truncation=True,
+            max_length=128,
+            padding=True,
+            return_tensors= None
+        )
+    
+    
+    # create clean datsets
+    train_dataset = Dataset.from_pandas(train_df[['text', 'labels']])
+    test_dataset = Dataset.from_pandas(test_df[['text', 'labels']])
+
+    # apply tokenizer
+    train_dataset = train_dataset.map(tokenize_function, batched=True, remove_columns=['text'])
+    test_dataset = test_dataset.map(tokenize_function, batched=True, remove_columns=['text'])
+
+    return train_dataset, test_dataset, tokenizer, id2label, label2id
 
 
 
