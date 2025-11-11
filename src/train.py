@@ -74,8 +74,7 @@ def content_safety_dataset():
         "Sexual content involving multiple partners graphically.",
         "Explicit adult animation with sexual scenes.",
         "Graphic sexual content in medical context."
-    ],
-
+    ]
 
     hateful_harmful = [
         "I hate all people from that religion they should leave our country.",
@@ -113,8 +112,7 @@ def content_safety_dataset():
         "Refugees are economic migrants pretending to be victims.",
         "Foreign workers are depressing wages for real citizens.",
         "Mixed race relationships dilute cultural purity."
-    ],
-
+    ]
 
     violent_graphic = [
         "The detailed instructions for self-harm and suicide methods.",
@@ -152,7 +150,7 @@ def content_safety_dataset():
         "Detailed accounts of gang initiations and violence.",
         "Graphic descriptions of medical trauma and surgeries.",
         "Promoting self-harm as a solution to problems."
-    ],
+    ]
 
 
     spam_promotional = [
@@ -244,10 +242,11 @@ def content_safety_dataset():
     # combine all samples data
     texts = adult_explicit + hateful_harmful + violent_graphic + spam_promotional + safe_neutral
     categories = (
-        ['adult_explicit'] * len(adult_explicit) + 
+        ['adult_explicit'] * len(adult_explicit) +
         ['hateful_harmful'] * len(hateful_harmful) +
         ['violent_graphic'] * len(violent_graphic) +
-        ['spam_promotional'] * len(safe_neutral)
+        ['spam_promotional'] * len(spam_promotional) +
+        ['safe_neutral'] * len(safe_neutral)
     )
 
     return pd.DataFrame({
@@ -303,11 +302,9 @@ def prepare_data_clean(df, model_name):
     # Clean tokenization function
     def tokenize_function(examples):
         text = examples['text']
-        if isinstance(text, str):
-            texts = [text]
 
         return tokenizer(
-            texts,
+            text,
             truncation=True,
             max_length=128,
             padding=True,
@@ -323,7 +320,205 @@ def prepare_data_clean(df, model_name):
     train_dataset = train_dataset.map(tokenize_function, batched=True, remove_columns=['text'])
     test_dataset = test_dataset.map(tokenize_function, batched=True, remove_columns=['text'])
 
-    return train_dataset, test_dataset, tokenizer, id2label, label2id
+    return train_dataset, test_dataset, tokenizer, label_mapping, id2label, label2id
 
 
+
+def compute_metrics(eval_pred):
+    """Simple accuracy metric computation."""
+    predictions, labels = eval_pred
+    predictions = np.argmax(predictions, axis=1)
+    accuracy = accuracy_score(labels, predictions)
+    return {"accuracy": accuracy}
+
+
+def main():
+    print("TRAINING")
+    print("="*60)
+    
+    # Configuration
+    model_name = "distilbert-base-uncased"
+    output_dir = "models/custom_support_model_WORKING"
+    
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Create clean dataset
+    print("\nCreating CLEAN dataset...")
+    df = content_safety_dataset()
+    print(f"Dataset shape: {df.shape}")
+    
+    # Prepare data cleanly
+    train_dataset, eval_dataset, tokenizer, label_mapping, id2label, label2id = prepare_data_clean(df, model_name)
+    
+    print(f"\n Final dataset info:")
+    print(f"   Training samples: {len(train_dataset)}")
+    print(f"   Test samples: {len(eval_dataset)}")
+    print(f"   Categories: {list(label_mapping.keys())}")
+    
+    # Load model
+    print("\nLoading model...")
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_name,
+        num_labels=len(label_mapping),
+        id2label=id2label,
+        label2id=label2id
+    )
+    print("Model loaded successfully!")
+    
+    # Ultra aggressive training arguments
+    print("\n Setting up training...")
+    training_args = TrainingArguments(
+        output_dir=output_dir,
+        num_train_epochs=12,  # More epochs
+        per_device_train_batch_size=2,  # Small batch size
+        per_device_eval_batch_size=4,
+        warmup_steps=200,
+        weight_decay=0.01,
+        learning_rate=8e-5,  # High learning rate
+        logging_dir=f'{output_dir}/logs',
+        logging_steps=5,
+        save_steps=100,
+        eval_steps=100,
+        seed=42,
+        gradient_accumulation_steps=2,
+        dataloader_pin_memory=False,
+        remove_unused_columns=False,
+        dataloader_num_workers=0,  # Avoid multiprocessing issues
+    )
+    
+    print(f"  Training configuration:")
+    print(f"   Learning Rate: {training_args.learning_rate}")
+    print(f"   Epochs: {training_args.num_train_epochs}")
+    print(f"   Batch Size: {training_args.per_device_train_batch_size}")
+    
+    # Initialize trainer
+    print("\n Initializing trainer...")
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        tokenizer=tokenizer,
+        compute_metrics=compute_metrics,
+    )
+    
+    # Start training
+    print("\nSTARTING TRAINING...")
+    print("="*60)
+    
+    try:
+        trainer.train()
+        print("TRAINING COMPLETED!")
+    except Exception as e:
+        print(f"Training failed: {e}")
+        print(f"Error details: {type(e).__name__}: {str(e)}")
+        return
+    
+    # Save model
+    print(f"\nSaving model to {output_dir}...")
+    trainer.save_model(output_dir)
+    tokenizer.save_pretrained(output_dir)
+    
+    # Save mappings
+    mappings = {
+        'label_mapping': label_mapping,
+        'id2label': id2label,
+        'label2id': label2id,
+        'categories': list(label_mapping.keys()),
+        'num_labels': len(label_mapping)
+    }
+    
+    with open(f"{output_dir}/label_mapping.json", "w") as f:
+        json.dump(mappings, f, indent=2)
+    
+    print("Model saved successfully!")
+    
+    # Immediate testing
+    print("\n IMMEDIATE COMPREHENSIVE TESTING")
+    print("="*50)
+    
+    try:
+        from transformers import pipeline
+        
+        classifier = pipeline(
+            "text-classification",
+            model=output_dir,
+            tokenizer=output_dir
+        )
+        
+        # Test cases
+        test_cases = [
+            # 1. Clear spam with urgency and financial promise
+            ("URGENT: You won $1,000,000! Click here to claim your prize now!", "spam_promotional"),
+    
+            # 2. Borderline adult content (should be explicit)
+            ("This movie contains graphic scenes of intimacy and strong sexual content", "adult_explicit"),
+    
+            # 3. Clear hate speech targeting specific group
+            ("All people from that country are criminals and should be deported immediately", "hateful_harmful"),
+    
+            # 4. Normal safe conversation
+            ("I'm going to the store to buy groceries for dinner tonight", "safe_neutral"),
+    
+            # 5. Violent content with graphic description
+            ("Detailed instructions on how to harm others with household weapons", "violent_graphic"),
+    
+            # 6. Promotional content disguised as notification
+            ("Your account has limited storage, upgrade to premium plan now!", "spam_promotional"),
+    
+            # 7. Ambiguous case - could be hateful or just critical
+            ("I strongly disagree with that religion's practices and beliefs", "safe_neutral"),
+    
+            # 8. Clear adult content with profanity
+            ("Explicit adult material with graphic nudity and strong language", "adult_explicit"),
+    
+            # 9. Educational discussion about violence (should be safe)
+            ("This historical document describes the battles of World War II", "safe_neutral"),
+    
+            # 10. Extreme hate speech with threats
+            ("We should eliminate all members of that race from our society", "hateful_harmful")
+        ]
+        
+        print("Testing predictions:")
+        print("-" * 60)
+        
+        correct = 0
+        total_conf = 0
+        high_conf_count = 0
+        
+        for i, (text, expected) in enumerate(test_cases, 1):
+            result = classifier(text)
+            predicted = result[0]['label']
+            confidence = result[0]['score']
+            
+            is_correct = predicted == expected
+            status = "✅" if is_correct else "❌"
+            
+            if is_correct:
+                correct += 1
+            if confidence > 0.8:
+                high_conf_count += 1
+            
+            total_conf += confidence
+            
+            print(f"{status} {i:2d}. Expected: {expected:15} | Got: {predicted:15} | Conf: {confidence:.3f}")
+        
+        accuracy = correct / len(test_cases)
+        avg_conf = total_conf / len(test_cases)
+        high_conf_ratio = high_conf_count / len(test_cases)
+        
+        print("-" * 60)
+        print(f" RESULTS:")
+        print(f"   Accuracy: {accuracy:.1%} ({correct}/{len(test_cases)})")
+        print(f"   Avg Confidence: {avg_conf:.3f}")
+        print(f"   High Confidence (>0.8): {high_conf_ratio:.1%}")
+    except Exception as e:
+        print(f"❌ Testing failed: {e}")
+    
+    print(f"\nWORKING TRAINING COMPLETE!")
+    print(f"📁 Model saved to: {output_dir}")
+
+
+if __name__ == "__main__":
+    main()
 
