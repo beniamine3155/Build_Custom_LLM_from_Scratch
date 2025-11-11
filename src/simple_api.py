@@ -64,18 +64,7 @@ async def web_interface():
     model_info = f"Path: {model_path}" if model_path else "Train a model first."
     categories = list(label_mapping.keys()) if label_mapping else ["adult_explicit", "hateful_harmful", "violent_graphic","spam_promotional","safe_neutral"]
     html_content = f"""
-    <html>
-        <head>
-            <title>Custom LLM API</title>
-        </head>
-        <body>
-            <h1>Welcome to the Custom LLM API</h1>
-            <form action="/predict" method="post">
-                <textarea name="text" rows="10" cols="50" placeholder="Enter text here..."></textarea><br>
-                <input type="submit" value="Classify">
-            </form>
-        </body>
-    </html>
+    
     """
     return html_content
 
@@ -109,4 +98,56 @@ async def classify(input: TextInput):
     
 
 
+@app.get("/test")
+async def test():
+    if not classifier:
+        return {"error": "No model loaded"}
+    
+    test_cases = [
+    "This movie contains explicit nudity and sexual content for adults only",
+    "People from that religion are evil and should be eliminated",
+    "Detailed instructions on how to build bombs and kill innocent people",
+    "URGENT! You won $1,000,000 click here to claim your prize now!",
+    "The weather today is sunny with a high of 75 degrees Fahrenheit",
+    "Graphic adult material with strong sexual themes and profanity",
+    "That race is inferior and doesn't deserve equal rights in society",
+    "Step-by-step guide to committing violent acts and terrorism",
+    "Make $5000 weekly from home no experience needed sign up now!",
+    "I need to go grocery shopping for dinner ingredients tonight",
+    "Explicit content with pornographic scenes and adult language",
+    "Women belong in the kitchen and shouldn't have professional careers",
+    "Methods for self-harm and detailed suicide instructions",
+    "Limited time offer buy one get ten free amazing deal!",
+    "The library opens at 9 AM and has many educational books",
+    "NSFW material with graphic sexual descriptions and nudity",
+    "Immigrants are criminals who are destroying our country",
+    "Celebrating school shootings and encouraging more violence",
+    "Your account has been compromised verify immediately!",
+    "Mathematics is an important subject for students to learn"
+    ]
+    
+    results = []
+    for text in test_cases:
+        try:
+            result = classifier(text)
+            if isinstance(result, list):
+                result = result[0]
+            results.append({
+                "text": text,
+                "prediction": result.get("label", "unknown"),
+                "confidence": result.get("score", 0.0)
+            })
+        except Exception as e:
+            results.append({
+                "text": text,
+                "prediction": "error",
+                "confidence": 0.0,
+                "error": str(e)
+            })
+    
+    return {"test_results": results}
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="127.0.0.1", port=8000)
         
